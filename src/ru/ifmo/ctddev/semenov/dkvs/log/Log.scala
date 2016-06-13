@@ -20,17 +20,23 @@ class Log(journalName: String) {
 
   private var writer = newBufferedWriter(path, UTF_8, CREATE, WRITE, APPEND)
 
+  def apply(id: Int): Option[LogItem] = if (0 <= id && id < journal.size) Some(journal(id)) else None
+
   def +=(logItem: LogItem) = {
     journal += logItem
     writer write logItem.toString
   }
 
-  def -=(id: Int) = {
-    journal remove id
+  def -=(from: Int) = {
+    if (from < journal.size) {
+      journal remove(from, journal.size - from)
 
-    // TODO: handle backups
-    writer = newBufferedWriter(path, UTF_8, CREATE_NEW, WRITE)
+      // TODO: handle backups
+      writer = newBufferedWriter(path, UTF_8, CREATE_NEW, WRITE)
 
-    journal foreach (writer write _.toString)
+      journal foreach (writer write _.toString)
+    }
   }
+
+  def size: Int = journal.size
 }

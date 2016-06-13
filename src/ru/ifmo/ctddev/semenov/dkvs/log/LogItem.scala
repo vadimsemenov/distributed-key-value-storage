@@ -6,7 +6,7 @@ import ru.ifmo.ctddev.semenov.dkvs.DELETE
 /**
   * @author Vadim Semenov (semenov@rain.ifmo.ru)
   */
-class LogItem(term: Int, command: Command) {
+class LogItem(val term: Int, val command: Command) {
   assert(command.isInstanceOf[SET] || command.isInstanceOf[DELETE])
 
   override def toString = s"$term $command\n"
@@ -14,9 +14,13 @@ class LogItem(term: Int, command: Command) {
 
 object LogItem {
   def apply(line: String): LogItem = {
-    val separator = line.indexOf(' ')
-    val term = line.substring(0, separator).toInt
-    val command = Command(line.substring(separator + 1))
-    new LogItem(term, command)
+    if (line == "null") {
+      null.asInstanceOf[LogItem]
+    } else {
+      val separator = line.indexOf(' ')
+      val term = line.substring(0, separator).toInt
+      val command = Command(line.substring(separator + 1))
+      new LogItem(term, command)
+    }
   }
 }

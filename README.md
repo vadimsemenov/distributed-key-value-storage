@@ -6,4 +6,6 @@ consensus algorithm.
 ## TODO:
 * complete README
 * raft-algorithm, lol
+* logging
+  * handle backups
 * ...

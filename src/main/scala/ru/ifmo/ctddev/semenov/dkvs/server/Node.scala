@@ -1,10 +1,10 @@
 package ru.ifmo.ctddev.semenov.dkvs.server
 
-import java.util.concurrent.{Callable, Executors}
+import java.util.concurrent.{Callable, Executors, TimeUnit}
 
 import ru.ifmo.ctddev.semenov.dkvs.log.Log
 import ru.ifmo.ctddev.semenov.dkvs.protocol._
-import ru.ifmo.ctddev.semenov.dkvs.utils.Utils
+import ru.ifmo.ctddev.semenov.dkvs.utils.{Timer, Utils}
 
 /**
   * @author Vadim Semenov (semenov@rain.ifmo.ru)
@@ -14,7 +14,7 @@ class Node(val id: Int) {
 
   val journal = new Log(s"dkvs_$id.log")
 
-  var condition: Condition = Follower // all nodes start as follower... todo: check
+  @volatile var role: Role = Follower // all nodes start as follower... todo: check
 
   var votedFor: Option[Int] = None
 
@@ -32,6 +32,12 @@ class Node(val id: Int) {
   var lastLogTerm: Int = 0
 
   val processor = Executors.newSingleThreadExecutor()
+
+  val timer = new Timer {
+    processAndGet {
+      prepareForCandidate()
+    }
+  }
 
   final val VALUE = "VALUE"
   final val NOT_FOUND = "NOT_FOUND"
@@ -74,6 +80,12 @@ class Node(val id: Int) {
     future.get()
   }
 
+  def processAndGet[T](action: => T) = {
+    val future = processor.submit(new Callable[T] {
+      override def call(): T = action
+    })
+    future.get()
+  }
   def requestVote(request: REQUEST_VOTE): REQUEST_VOTE_RESPONSE = {
     // TODO: check
     if (request.term < currentTerm) {
@@ -115,5 +127,14 @@ class Node(val id: Int) {
       }
     }
   }
+
+  private def prepareForCandidate() = {
+    role = Candidate
+    
+  }
+
+  private def prepareForLeader() = ???
+
+  private def prepareForFollower() = ???
 }
 

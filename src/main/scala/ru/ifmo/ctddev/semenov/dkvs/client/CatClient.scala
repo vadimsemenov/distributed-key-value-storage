@@ -8,10 +8,10 @@ import java.util.concurrent.LinkedBlockingQueue
 import scala.annotation.tailrec
 import scala.util.{Failure, Success, Try}
 
-/**
+/** Use
   * @author Vadim Semenov (semenov@rain.ifmo.ru)
   */
-class Client(socket: Socket) {
+class CatClient(socket: Socket) {
   val consoleReader = new BufferedReader(new InputStreamReader(System.in, UTF_8))
   val consoleWriter = new PrintWriter(new OutputStreamWriter(System.out, UTF_8))
   val socketReader = new BufferedReader(new InputStreamReader(socket.getInputStream, UTF_8))
@@ -53,7 +53,7 @@ object Connect {
   def main(args: Array[String]) {
     if (args.length != 2) println("Usage: Client <host> <port>")
     else Try(new Socket(args(0), args(1).toInt)) match {
-      case Success(socket)    => new Client(socket).start()
+      case Success(socket)    => new CatClient(socket).start()
       case Failure(exception) =>
         println(s"Cannot connect to ${args(0)}:${args(1)}")
         exception.printStackTrace()

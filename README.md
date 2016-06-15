@@ -8,6 +8,9 @@ consensus algorithm.
 * raft-algorithm, lol
 * logging
   * handle backups
-* cps (nodes, role, currentTerm, currentLeader, commitIndex, ...)
-* use akka-framework
+* client
+  * add option to connect to
+    * specific node
+    * cluster
+* (?) cps (nodes, role, currentTerm, currentLeader, commitIndex, ...)
 * ...

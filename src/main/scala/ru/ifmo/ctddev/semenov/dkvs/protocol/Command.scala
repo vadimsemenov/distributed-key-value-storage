@@ -34,35 +34,35 @@ object Command {
             key   = args(0),
             value = args(1)
           )
-        case "appendEntries"         =>
-          require(args.length == 6, s"illegal appendEntries args: '$args'")
-          APPEND_ENTRY(
-            term         = args(0).toInt,
-            leaderId     = args(1).toInt,
-            prevLogIndex = args(2).toInt,
-            prevLogTerm  = args(3).toInt,
-            entry        = LogItem(args(4)),
-            leaderCommit = args(5).toInt)
-        case "appendEntriesResponse" =>
-          require(args.length == 2, s"illegal appendEntriesResponse args: '$args'")
-          APPEND_ENTRY_RESPONSE(
-            term    = args(0).toInt,
-            success = args(1).toBoolean
-          )
-        case "requestVote"           =>
-          require(args.length == 4, s"illegal requestVote args: '$args'")
-          REQUEST_VOTE(
-            term         = args(0).toInt,
-            candidateId  = args(1).toInt,
-            lastLogIndex = args(2).toInt,
-            lastLogTerm  = args(3).toInt
-          )
-        case "requestVoteResponse"   =>
-          require(args.length == 2, s"illegal requestVoteResponse args: '$args'")
-          REQUEST_VOTE_RESPONSE(
-            term        = args(0).toInt,
-            voteGranted = args(1).toBoolean
-          )
+//        case "appendEntries"         =>
+//          require(args.length == 6, s"illegal appendEntries args: '$args'")
+//          APPEND_ENTRY(
+//            term         = args(0).toInt,
+//            leaderId     = args(1).toInt,
+//            prevLogIndex = args(2).toInt,
+//            prevLogTerm  = args(3).toInt,
+//            entry        = LogItem(args(4)),
+//            leaderCommit = args(5).toInt)
+//        case "appendEntriesResponse" =>
+//          require(args.length == 2, s"illegal appendEntriesResponse args: '$args'")
+//          APPEND_ENTRY_RESPONSE(
+//            term    = args(0).toInt,
+//            success = args(1).toBoolean
+//          )
+//        case "requestVote"           =>
+//          require(args.length == 4, s"illegal requestVote args: '$args'")
+//          REQUEST_VOTE(
+//            term         = args(0).toInt,
+//            candidateId  = args(1).toInt,
+//            lastLogIndex = args(2).toInt,
+//            lastLogTerm  = args(3).toInt
+//          )
+//        case "requestVoteResponse"   =>
+//          require(args.length == 2, s"illegal requestVoteResponse args: '$args'")
+//          REQUEST_VOTE_RESPONSE(
+//            term        = args(0).toInt,
+//            voteGranted = args(1).toBoolean
+//          )
         case _                       => 
           throw new IllegalArgumentException(s"unknown command '$command'")
       }

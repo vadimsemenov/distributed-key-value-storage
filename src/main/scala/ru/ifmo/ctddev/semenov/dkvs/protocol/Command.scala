@@ -63,7 +63,9 @@ object Command {
 //            term        = args(0).toInt,
 //            voteGranted = args(1).toBoolean
 //          )
-        case _                       => 
+//        case "ElectionTimeout"       =>
+//        case "SendHeartbeat"         =>
+        case _                       =>
           throw new IllegalArgumentException(s"unknown command '$command'")
       }
     }
@@ -94,7 +96,7 @@ case class APPEND_ENTRY(term: Int, leaderId: Int, prevLogIndex: Int, prevLogTerm
   override def toString = s"appendEntries $term,$leaderId,$prevLogIndex,$prevLogTerm,$entry,$leaderCommit"
 }
 
-case class APPEND_ENTRY_RESPONSE(term: Int, success: Boolean) extends Command {
+case class APPEND_ENTRY_RESPONSE(term: Int, id: Int, success: Boolean) extends Command {
   override def toString = s"appendEntriesResponse $term,$success"
 }
 
@@ -106,4 +108,6 @@ case class REQUEST_VOTE_RESPONSE(term: Int, voteGranted: Boolean) extends Comman
   override def toString = s"requestVote $term,$voteGranted"
 }
 
-// TODO: APPEND_ENTRIES, APPEND_ENTRIES_RESPONSE, REQUEST_VOTE, REQUEST_VOTE_RESPONSE
+trait RaftCommand extends Command
+case object ElectionTimeout extends RaftCommand
+case object SendHeartbeat extends RaftCommand

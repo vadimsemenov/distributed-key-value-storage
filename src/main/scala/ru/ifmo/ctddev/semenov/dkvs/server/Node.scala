@@ -2,7 +2,7 @@ package ru.ifmo.ctddev.semenov.dkvs.server
 
 import akka.actor.{Actor, LoggingFSM}
 import ru.ifmo.ctddev.semenov.dkvs.client.RaftClient.RaftResponse
-import ru.ifmo.ctddev.semenov.dkvs.log.Log
+import ru.ifmo.ctddev.semenov.dkvs.log.{Log, LogItem}
 import ru.ifmo.ctddev.semenov.dkvs.protocol._
 
 import scala.concurrent.duration._
@@ -25,16 +25,17 @@ class Node(val id: Int) extends Actor with LoggingFSM[Role, Metadata] {
   final val VALUE = "VALUE %s %s"
   final val NOT_FOUND = "NOT_FOUND"
   final val STORED = "STORED"
+  final val DELETED = "DELETED"
   final val PONG = "PONG"
 
   when(Follower) {
     case Event(request: APPEND_ENTRY, meta)                                                         => // TODO: check
       if (meta.term > request.term) {
-        sender ! APPEND_ENTRY_RESPONSE(meta.term, success = false)
+        sender ! APPEND_ENTRY_RESPONSE(meta.term, meta.id, success = false)
       } else {
         resetHeartbeatTimer()
         val success = appendEntry(request, meta)
-        sender ! APPEND_ENTRY_RESPONSE(meta.term, success)
+        sender ! APPEND_ENTRY_RESPONSE(meta.term, meta.id, success)
       }
       stay
     case Event(request: REQUEST_VOTE, meta)                                                         => // TODO: check
@@ -88,16 +89,15 @@ class Node(val id: Int) extends Actor with LoggingFSM[Role, Metadata] {
       }
     case Event(command: APPEND_ENTRY, meta)                    =>
       if (meta.term > command.term) {
-        sender ! APPEND_ENTRY_RESPONSE(meta.term, success = false)
+        sender ! APPEND_ENTRY_RESPONSE(meta.term, meta.id, success = false)
       } else {
         val success = appendEntry(command, meta)
-        sender ! APPEND_ENTRY_RESPONSE(meta.term, success)
+        sender ! APPEND_ENTRY_RESPONSE(meta.term, meta.id, success)
       }
       stay
     case Event(ElectionTimeout, meta)                          =>
       goto(Candidate) using prepareForCandidate(meta)
   }
-  final val DELETED = "DELETED"
 
   when(Leader) {
     case Event(command: SET, meta)                         =>
@@ -107,13 +107,27 @@ class Node(val id: Int) extends Actor with LoggingFSM[Role, Metadata] {
       meta put(command, () => sender ! RaftResponse(DELETED))
       stay
     case Event(SendHeartbeat, meta)                        =>
-      meta.nodes foreach (_ ! emptyAppendEntry(meta))
+      broadcastEntries(meta)
       stay
-    case Event(APPEND_ENTRY_RESPONSE(term, success), meta) =>
+    case Event(APPEND_ENTRY_RESPONSE(term, followerId, success), meta) =>
       if (meta.updateTerm(term)) {
         goto(Follower) using prepareForFollower(meta)
       } else {
-        // TODO: update indices
+        assert(meta.leaderData.isDefined)
+        if (success) {
+          val (nextIndex, matchIndex) = meta.leaderData.get
+          val idx = nextIndex(followerId)
+          matchIndex(followerId) = idx
+          nextIndex(followerId) = math.min(meta.journal.size, idx + 1)
+          // try to update commitIndex
+          val qty = nextIndex count (_ >= idx)
+          if (2 * qty > meta.nodes.length) {
+            meta.updateCommitIndex(idx)
+          }
+        } else {
+          val nextIndex = meta.leaderData.get._1
+          nextIndex(followerId) -= 1
+        }
         stay
       }
     case Event(command: REQUEST_VOTE, meta)                =>
@@ -122,7 +136,6 @@ class Node(val id: Int) extends Actor with LoggingFSM[Role, Metadata] {
       } else {
         stay replying REQUEST_VOTE_RESPONSE(meta.term, voteGranted = false)
       }
-    case Event(_, _)                                       => ??? // TODO: delete
   }
 
   whenUnhandled {
@@ -133,9 +146,9 @@ class Node(val id: Int) extends Actor with LoggingFSM[Role, Metadata] {
   }
 
   // TODO: better naming
-  private def resetElectionTimer() = setTimer(electionTimerName, electionTimerMsg, nextElectionTimeout())
+  private def resetElectionTimer() = setTimer(electionTimerName, ElectionTimeout, nextElectionTimeout())
 
-  private def resetHeartbeatTimer() = setTimer(heartbeatTimerName, heartbeatTimerMsg, nextHeartbeatTimeout)
+  private def resetHeartbeatTimer() = setTimer(heartbeatTimerName, SendHeartbeat, nextHeartbeatTimeout)
 
   private def appendEntry(request: APPEND_ENTRY, meta: Metadata): Boolean = {
     assert(request.term <= meta.term)
@@ -159,24 +172,49 @@ class Node(val id: Int) extends Actor with LoggingFSM[Role, Metadata] {
     }
   }
 
-  private def emptyAppendEntry(meta: Metadata) =
-    APPEND_ENTRY(meta.term, meta.id, meta.journal.lastTerm, meta.journal.lastTerm, null, meta.commitIndex)
+  private def broadcastEntries(meta: Metadata): Unit = {
+    assert(meta.leader contains meta.nodes(meta.id))
+    assert(meta.leaderData.isDefined)
+    meta.nodes.indices foreach (sendEntryTo(_, meta))
+    resetHeartbeatTimer()
+  }
+
+  private def sendEntryTo(nodeId: Int, meta: Metadata): Unit = { // TODO: check
+    val prevIndex = meta.leaderData.get._1(nodeId) - 1
+    val prevTerm = meta.journal.termOf(prevIndex)
+    val entry = meta.journal(prevIndex + 1) match {
+      case Some(LogItem(term, command, _)) => LogItem(term, command, LogItem.void)
+      case None                            => null
+    }
+    meta.nodes(nodeId) ! APPEND_ENTRY(meta.term, meta.id, prevIndex, prevTerm, entry, meta.commitIndex)
+  }
 
   private def get(key: String, meta: Metadata): String = ((meta.map get key) map (VALUE.format(key, _))) getOrElse NOT_FOUND
 
   private def prepareForCandidate(meta: Metadata): Metadata = {
+    cancelTimer(heartbeatTimerName)
     meta.nextTerm()
-    ??? // TODO
+    (meta.nodes withFilter (_ != meta.nodes(meta.id))) foreach {
+      _ ! REQUEST_VOTE(meta.term, meta.id, meta.journal.lastIndex, meta.journal.lastTerm)
+    }
+    resetElectionTimer()
     meta
   }
 
   private def prepareForLeader(meta: Metadata): Metadata = {
-    ??? // TODO
+    log.info(s"Leader for term ${meta.term}")
+    meta.leader = Some(meta.nodes(meta.id))
+    meta.leaderData = Some((
+      Array.fill[Int](meta.nodes.length)(meta.journal.size),
+      Array.fill[Int](meta.nodes.length)(0)
+    ))
+    broadcastEntries(meta)
     meta
   }
 
   private def prepareForFollower(meta: Metadata): Metadata = {
-    ??? // TODO
+    cancelTimer(heartbeatTimerName)
+    meta.votes = Votes.empty
     meta
   }
 
@@ -185,16 +223,9 @@ class Node(val id: Int) extends Actor with LoggingFSM[Role, Metadata] {
 
 object Node {
   val electionTimerName = "noHeartbeatTimer"
-  val electionTimerMsg = ElectionTimeout
   val heartbeatTimerName = "heartbeatTimerName"
-  val heartbeatTimerMsg = SendHeartbeat
 
+  // TODO: constants should be configurable
   def nextElectionTimeout(): FiniteDuration = (math.random * 100 + 300) millis
-
   def nextHeartbeatTimeout: FiniteDuration = 150 millis
-
-  // TODO: shouldn't it be in (and extend) Command.scala?
-  trait RaftMessages
-  case object ElectionTimeout extends RaftMessages
-  case object SendHeartbeat extends RaftMessages
 }

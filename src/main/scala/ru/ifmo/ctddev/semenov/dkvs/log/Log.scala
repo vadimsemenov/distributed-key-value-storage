@@ -20,7 +20,9 @@ class Log(journalName: String) {
 
   private var writer = newBufferedWriter(path, UTF_8, CREATE, WRITE, APPEND)
 
-  def apply(id: Int): Option[LogItem] = if (0 <= id && id < journal.size) Some(journal(id)) else None
+  def apply(id: Int): Option[LogItem] = if (inRanges(id)) Some(journal(id)) else None
+
+  def inRanges(id: Int) = 0 <= id && id < journal.size
 
   def +=(logItem: LogItem) = {
     journal += logItem
@@ -38,7 +40,9 @@ class Log(journalName: String) {
     }
   }
 
-  def lastTerm = if (journal.isEmpty) 0 else journal.last.term
+  def lastTerm = termOf(size - 1)
+
+  def termOf(idx: Int) = if (inRanges(idx)) journal(idx).term else 0
 
   def lastIndex = journal.size - 1
 

@@ -56,6 +56,17 @@ case class Metadata(id: Int,
 }
 
 object Metadata {
+  def apply(id: Int, journal: Log, nodes: Array[NodeRef]) = Metadata(
+    id = id,
+    term = 0,
+    journal = journal,
+    map = mutable.Map.empty,
+    nodes = nodes,
+    leader = None,
+    votes = Votes.empty,
+    commitIndex = 0,
+    leaderData = None
+  )
   type NodeRef = ActorSelection
 }
 

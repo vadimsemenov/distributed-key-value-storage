@@ -1,140 +1,200 @@
 package ru.ifmo.ctddev.semenov.dkvs.server
 
-import java.util.concurrent.{Callable, Executors, TimeUnit}
-
+import akka.actor.{Actor, LoggingFSM}
+import ru.ifmo.ctddev.semenov.dkvs.client.RaftClient.RaftResponse
 import ru.ifmo.ctddev.semenov.dkvs.log.Log
 import ru.ifmo.ctddev.semenov.dkvs.protocol._
-import ru.ifmo.ctddev.semenov.dkvs.utils.{Timer, Utils}
+
+import scala.concurrent.duration._
 
 /**
   * @author Vadim Semenov (semenov@rain.ifmo.ru)
   */
-class Node(val id: Int) {
-  val (portById, timeout) = Utils.readProperties("dkvs.properties")
+class Node(val id: Int) extends Actor with LoggingFSM[Role, Metadata] {
 
-  val journal = new Log(s"dkvs_$id.log")
+  import Node._
 
-  @volatile var role: Role = Follower // all nodes start as follower... todo: check
+  startWith(Follower, Metadata(
+    id = id,
+    journal = new Log(s"dkvs_$id.log"),
+    nodes = Array.empty[Metadata.NodeRef] // TODO: resolve nodes
+  ))
 
-  var votedFor: Option[Int] = None
+  resetElectionTimer()
 
-  // common fields:
-  var commitIndex: Int = 0
-  var lastApplied: Int = 0
-
-  // leader fields:
-  var nextIndex: Array[Int] = null
-  var matchIndex: Array[Int] = null
-
-  var currentLeader: Int = -1
-  var currentTerm: Int = 0
-  var lastLogIndex: Int = 0
-  var lastLogTerm: Int = 0
-
-  val processor = Executors.newSingleThreadExecutor()
-
-  val timer = new Timer {
-    processAndGet {
-      prepareForCandidate()
-    }
-  }
-
-  final val VALUE = "VALUE"
+  final val VALUE = "VALUE %s %s"
   final val NOT_FOUND = "NOT_FOUND"
   final val STORED = "STORED"
-  final val DELETED = "DELETED"
   final val PONG = "PONG"
 
-  final val UNEXPECTED_COMMAND = "unexpected command: "
-
-  def get(key: String): String = ???
-
-  def set(key: String, value: String): String = ???
-
-  def delete(key: String): String = ???
-
-  def processCommand(command: Command): String = {
-    val future = processor.submit(new Callable[String]() {
-      override def call(): String = command match {
-        case GET(key)                                                                     =>
-          get(key)
-        case SET(key, value)                                                              =>
-          set(key, value)
-        case DELETE(key)                                                                  =>
-          delete(key)
-        case PING                                                                         =>
-          PONG
-        case APPEND_ENTRY(term, leaderId, prevLogIndex, prevLogTerm, entry, leaderCommit) =>
-          ???
-        case APPEND_ENTRY_RESPONSE(term, success)                                         =>
-          ???
-        case cmd: REQUEST_VOTE                   =>
-          val response = requestVote(cmd)
-          response.toString
-        case REQUEST_VOTE_RESPONSE(term, voteGranted)                                     =>
-          ??? // TODO: nothing
-        case _                                                                            =>
-          UNEXPECTED_COMMAND
+  when(Follower) {
+    case Event(request: APPEND_ENTRY, meta)                                                         => // TODO: check
+      if (meta.term > request.term) {
+        sender ! APPEND_ENTRY_RESPONSE(meta.term, success = false)
+      } else {
+        resetHeartbeatTimer()
+        val success = appendEntry(request, meta)
+        sender ! APPEND_ENTRY_RESPONSE(meta.term, success)
       }
-    })
-    future.get()
+      stay
+    case Event(request: REQUEST_VOTE, meta)                                                         => // TODO: check
+      if (meta.term > request.term) {
+        sender ! REQUEST_VOTE_RESPONSE(meta.term, voteGranted = false)
+      } else {
+        meta.updateTerm(request.term)
+        val voteGranted = meta.votes.votedFor.getOrElse(request.candidateId) == request.candidateId &&
+          meta.journal.lastTerm <= request.lastLogTerm &&
+          meta.journal.lastIndex <= request.lastLogIndex
+        if (voteGranted) meta.votes.voteFor(request.candidateId)
+        sender ! REQUEST_VOTE_RESPONSE(meta.term, voteGranted)
+      }
+      stay
+    case Event(command: Command, meta) if command.isInstanceOf[SET] || command.isInstanceOf[DELETE] =>
+      meta.leader match {
+        case Some(leader) =>
+          leader forward command
+        case None         =>
+        // FIXME: lost data :/
+        // maybe we can try to add record to local journal and goto(Candidate)
+        // so we at least try to safe this record
+      }
+      stay
+    case Event(ElectionTimeout, meta)                                                               =>
+      goto(Candidate) using prepareForCandidate(meta)
   }
 
-  def processAndGet[T](action: => T) = {
-    val future = processor.submit(new Callable[T] {
-      override def call(): T = action
-    })
-    future.get()
+  when(Candidate) {
+    // FIXME: ignores incoming client-requests
+    case Event(REQUEST_VOTE_RESPONSE(term, voteGranted), meta) =>
+      if (term < meta.term) {
+        // outdated response, request for new votes
+        sender ! REQUEST_VOTE(meta.term, meta.id, meta.journal.lastIndex, meta.journal.lastTerm)
+        stay
+      } else if (term > meta.term) {
+        meta updateTerm term
+        goto(Follower) using prepareForFollower(meta)
+      } else {
+        if (voteGranted) meta.votes.receiveNewVote()
+        if (meta.votes.majority(meta.nodes.length)) goto(Leader) using prepareForLeader(meta)
+        else stay
+      }
+    case Event(command: REQUEST_VOTE, meta)                    =>
+      if (meta.updateTerm(command.term)) {
+        sender ! REQUEST_VOTE_RESPONSE(meta.term, voteGranted = true)
+        goto(Follower) using prepareForFollower(meta)
+      } else {
+        sender ! REQUEST_VOTE_RESPONSE(meta.term, voteGranted = false)
+        stay
+      }
+    case Event(command: APPEND_ENTRY, meta)                    =>
+      if (meta.term > command.term) {
+        sender ! APPEND_ENTRY_RESPONSE(meta.term, success = false)
+      } else {
+        val success = appendEntry(command, meta)
+        sender ! APPEND_ENTRY_RESPONSE(meta.term, success)
+      }
+      stay
+    case Event(ElectionTimeout, meta)                          =>
+      goto(Candidate) using prepareForCandidate(meta)
   }
-  def requestVote(request: REQUEST_VOTE): REQUEST_VOTE_RESPONSE = {
-    // TODO: check
-    if (request.term < currentTerm) {
-      REQUEST_VOTE_RESPONSE(currentTerm, voteGranted = false)
-    } else {
-      currentTerm = request.term
-      votedFor match {
-        case None | Some(request.candidateId) =>
-          if (request.lastLogIndex >= lastLogIndex && request.lastLogTerm >= lastLogTerm) {
-            votedFor = Some(request.candidateId)
-            REQUEST_VOTE_RESPONSE(currentTerm, voteGranted = true)
-          } else {
-            REQUEST_VOTE_RESPONSE(currentTerm, voteGranted = false)
+  final val DELETED = "DELETED"
+
+  when(Leader) {
+    case Event(command: SET, meta)                         =>
+      meta put(command, () => sender ! RaftResponse(STORED))
+      stay
+    case Event(command: DELETE, meta)                      =>
+      meta put(command, () => sender ! RaftResponse(DELETED))
+      stay
+    case Event(SendHeartbeat, meta)                        =>
+      meta.nodes foreach (_ ! emptyAppendEntry(meta))
+      stay
+    case Event(APPEND_ENTRY_RESPONSE(term, success), meta) =>
+      if (meta.updateTerm(term)) {
+        goto(Follower) using prepareForFollower(meta)
+      } else {
+        // TODO: update indices
+        stay
+      }
+    case Event(command: REQUEST_VOTE, meta)                =>
+      if (meta updateTerm command.term) {
+        goto(Follower) using prepareForFollower(meta) replying REQUEST_VOTE_RESPONSE(meta.term, voteGranted = true)
+      } else {
+        stay replying REQUEST_VOTE_RESPONSE(meta.term, voteGranted = false)
+      }
+    case Event(_, _)                                       => ??? // TODO: delete
+  }
+
+  whenUnhandled {
+    case Event(PING, meta) =>
+      stay replying RaftResponse(PONG)
+    case Event(GET(key), meta) =>
+      stay replying RaftResponse(get(key, meta))
+  }
+
+  // TODO: better naming
+  private def resetElectionTimer() = setTimer(electionTimerName, electionTimerMsg, nextElectionTimeout())
+
+  private def resetHeartbeatTimer() = setTimer(heartbeatTimerName, heartbeatTimerMsg, nextHeartbeatTimeout)
+
+  private def appendEntry(request: APPEND_ENTRY, meta: Metadata): Boolean = {
+    assert(request.term <= meta.term)
+    meta.updateTerm(request.term)
+    meta.leader = Some(meta.nodes(request.leaderId)) // update current leader
+    meta.journal(request.prevLogIndex) match {
+      case None       =>
+        false
+      case Some(item) =>
+        if (item.term == request.prevLogTerm) {
+          meta.journal -= request.prevLogIndex + 1
+          if (request.entry != null) meta.journal += request.entry
+          if (request.leaderCommit > meta.commitIndex) {
+            meta.updateCommitIndex(request.leaderCommit)
           }
-        case _                                =>
-          REQUEST_VOTE_RESPONSE(currentTerm, voteGranted = false)
-      }
+          true
+        } else {
+          meta.journal -= request.prevLogIndex
+          false
+        }
     }
   }
 
-  def appendEntry(request: APPEND_ENTRY): APPEND_ENTRY_RESPONSE = {
-    // TODO: check
-    if (request.term < currentTerm) {
-      APPEND_ENTRY_RESPONSE(currentTerm, success = false)
-    } else {
-      currentTerm = request.term
-      journal(request.prevLogIndex) match {
-        case None => APPEND_ENTRY_RESPONSE(currentTerm, success = false)
-        case Some(item) =>
-          if (item.term == request.prevLogTerm) {
-            journal -= request.prevLogIndex + 1
-            if (request.entry != null) journal += request.entry
-            if (request.leaderCommit > commitIndex) commitIndex = Math.min(request.leaderCommit, journal.size)
-            APPEND_ENTRY_RESPONSE(currentTerm, success = true)
-          } else {
-            journal -= request.prevLogIndex
-            APPEND_ENTRY_RESPONSE(currentTerm, success = false)
-          }
-      }
-    }
+  private def emptyAppendEntry(meta: Metadata) =
+    APPEND_ENTRY(meta.term, meta.id, meta.journal.lastTerm, meta.journal.lastTerm, null, meta.commitIndex)
+
+  private def get(key: String, meta: Metadata): String = ((meta.map get key) map (VALUE.format(key, _))) getOrElse NOT_FOUND
+
+  private def prepareForCandidate(meta: Metadata): Metadata = {
+    meta.nextTerm()
+    ??? // TODO
+    meta
   }
 
-  private def prepareForCandidate() = {
-    role = Candidate
-    
+  private def prepareForLeader(meta: Metadata): Metadata = {
+    ??? // TODO
+    meta
   }
 
-  private def prepareForLeader() = ???
+  private def prepareForFollower(meta: Metadata): Metadata = {
+    ??? // TODO
+    meta
+  }
 
-  private def prepareForFollower() = ???
+  initialize() // FSM requirement
 }
 
+object Node {
+  val electionTimerName = "noHeartbeatTimer"
+  val electionTimerMsg = ElectionTimeout
+  val heartbeatTimerName = "heartbeatTimerName"
+  val heartbeatTimerMsg = SendHeartbeat
+
+  def nextElectionTimeout(): FiniteDuration = (math.random * 100 + 300) millis
+
+  def nextHeartbeatTimeout: FiniteDuration = 150 millis
+
+  // TODO: shouldn't it be in (and extend) Command.scala?
+  trait RaftMessages
+  case object ElectionTimeout extends RaftMessages
+  case object SendHeartbeat extends RaftMessages
+}

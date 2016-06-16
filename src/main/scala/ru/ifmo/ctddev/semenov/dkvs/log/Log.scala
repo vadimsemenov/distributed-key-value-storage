@@ -38,5 +38,9 @@ class Log(journalName: String) {
     }
   }
 
+  def lastTerm = if (journal.isEmpty) 0 else journal.last.term
+
+  def lastIndex = journal.size - 1
+
   def size: Int = journal.size
 }

@@ -23,7 +23,10 @@ case class Metadata(id: Int,
                     // var appliedIndex: Int = 0, // useless?
                     // exists only in leader-state
                     //                     nextIndex    matchIndex
+                    //                     exact        inclusive
                     var leaderData: Option[(Array[Int], Array[Int])] = None) {
+  def toCandidate() = votes = Votes.forCandidate(id)
+
   def nextTerm() = updateTerm(term + 1)
 
   def updateTerm(term: Int): Boolean = {
@@ -36,27 +39,32 @@ case class Metadata(id: Int,
     }
   }
 
-  def updateCommitIndex(leaderCommit: Int) = {
-    val next = math.max(leaderCommit, journal.size)
-    assert(journal(next).get.term == term, "update commitIndex with illegal term")
-    for (i <- commitIndex + 1 to next) {
-      journal(i) get match {
-        case LogItem(_, SET(key, value), onStored) =>
-          map += key -> value
-          onStored()
-        case LogItem(_, DELETE(key), onStored)     =>
-          map remove key
-          onStored()
-      }
+  // commitIndex is exclusive
+  def updateCommitIndex(newCommitIndex: Int) = {
+    val next = math.min(newCommitIndex, journal.size)
+//    assert(next == 0 || journal(next - 1).get.term == term,
+//      s"commitIndex (next=$next) with illegal term=${journal(next - 1).get.term}")
+    for (i <- commitIndex until next) journal(i) get match {
+      case LogItem(_, SET(key, value), onStored) =>
+        map += key -> value
+        println(s"stored ($key,$value)")
+        onStored()
+      case LogItem(_, DELETE(key), onStored)     =>
+        map remove key
+        println(s"deleted ($key)")
+        onStored()
     }
+    commitIndex = math.max(commitIndex, next)
     // TODO: check!
   }
+
+  def receiveNewVote() = votes = votes.receiveNewVote()
 
   def put(command: Command, onStored: () => Unit) = journal += LogItem(term, command, onStored)
 }
 
 object Metadata {
-  def apply(id: Int, journal: Log, nodes: Array[NodeRef]) = Metadata(
+  def apply(id: Int, journal: Log, nodes: Array[NodeRef]): Metadata = Metadata(
     id = id,
     term = 0,
     journal = journal,

@@ -96,8 +96,8 @@ case class APPEND_ENTRY(term: Int, leaderId: Int, prevLogIndex: Int, prevLogTerm
   override def toString = s"appendEntries $term,$leaderId,$prevLogIndex,$prevLogTerm,$entry,$leaderCommit"
 }
 
-case class APPEND_ENTRY_RESPONSE(term: Int, id: Int, success: Boolean) extends Command {
-  override def toString = s"appendEntriesResponse $term,$success"
+case class APPEND_ENTRY_RESPONSE(term: Int, id: Int, logSize: Int, success: Boolean) extends Command {
+  override def toString = s"appendEntriesResponse $term,$id,$logSize,$success"
 }
 
 case class REQUEST_VOTE(term: Int, candidateId: Int, lastLogIndex: Int, lastLogTerm: Int) extends Command {
@@ -105,7 +105,7 @@ case class REQUEST_VOTE(term: Int, candidateId: Int, lastLogIndex: Int, lastLogT
 }
 
 case class REQUEST_VOTE_RESPONSE(term: Int, voteGranted: Boolean) extends Command {
-  override def toString = s"requestVote $term,$voteGranted"
+  override def toString = s"requestVoteResponse $term,$voteGranted"
 }
 
 trait RaftCommand extends Command

@@ -42,10 +42,10 @@ object RaftClient {
       // it should connect to cluster, not to specific node. isn't it?
       // TODO: add address to config or constant
       // TODO: add option to connect to cluster
-      val clusterNode = system.actorSelection(s"akka.tcp://raft@$host:$port/user/dkvs-$id")
+      val clusterNode = system.actorSelection(s"akka.tcp://dkvs-system@$host:$port/user/dkvs-$id")
       val client = system.actorOf(props(clusterNode), "raftClient")
       for (line <- scala.io.Source.stdin.getLines()) {
-        client ! ConsoleMessage(line)
+        client ! ConsoleMessage(line.trim)
       }
       client ! Exit
     }

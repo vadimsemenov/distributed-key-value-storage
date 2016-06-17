@@ -14,7 +14,7 @@ object Utils {
 
   def readProperties(file: String): (Array[String], Array[Int], Long) = {
     val properties = new Properties()
-    properties.load(Files.newInputStream(Paths.get(file)))
+    properties.load(getClass.getClassLoader.getResourceAsStream(file))
     val hosts = new mutable.ArrayBuffer[String]()
     val ports = new mutable.ArrayBuffer[Int]()
     // 0-indexed

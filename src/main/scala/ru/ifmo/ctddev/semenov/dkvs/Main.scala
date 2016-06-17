@@ -14,14 +14,14 @@ object Main {
 
   def main(args: Array[String]): Unit = {
     checkVariant(3) // Raft
-    // TODO: timeout!
     val (hosts, ports, timeout) = Utils.readProperties("dkvs.cfg")
+    Node.setTimeoutBase(timeout)
     def nodeStartup(id: Int): ActorRef = {
       val log = new Log(s"dkvs_$id.log")
       val config = (ConfigFactory parseString s"akka.remote.netty.tcp.port=${ports(id)}")
         .withFallback(ConfigFactory.load())
       val system = ActorSystem(s"dkvs-system", config)
-      val nodes = (for (idx <- hosts.indices if idx != id) yield
+      val nodes = (for (idx <- hosts.indices) yield
         system.actorSelection(s"akka.tcp://dkvs-system@${hosts(idx)}:${ports(idx)}/user/dkvs-$idx")).toArray
       val meta = Metadata(id, log, nodes)
       system.actorOf(Node.props(meta), s"dkvs-$id")
@@ -37,7 +37,7 @@ object Main {
   }
 
   def terminate(nodes: ActorRef*): Unit = {
-    scala.io.StdIn.readLine("press return to exit")
+    scala.io.StdIn.readLine("press return to exit\n")
     nodes foreach (_ ! PoisonPill)
   }
 

@@ -27,6 +27,7 @@ class Log(journalName: String) {
   def +=(logItem: LogItem) = {
     journal += logItem
     writer write logItem.toString
+    writer.flush()
   }
 
   def -=(from: Int) = {
@@ -47,4 +48,6 @@ class Log(journalName: String) {
   def lastIndex = journal.size - 1
 
   def size: Int = journal.size
+
+  override def toString = journal.toString
 }

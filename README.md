@@ -5,12 +5,14 @@ consensus algorithm.
 
 ## TODO:
 * complete README
-* raft-algorithm, lol
+* documentation
 * logging
   * handle backups
 * client
   * add option to connect to
     * specific node
     * cluster
-* (?) cps (nodes, role, currentTerm, currentLeader, commitIndex, ...)
+* consistent hashing
+* create independent modules for consensus algorithm and
+key value storage implementation
 * ...
